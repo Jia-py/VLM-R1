@@ -59,6 +59,8 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
+from transformers import BitsAndBytesConfig
+
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
@@ -215,6 +217,7 @@ class Qwen2VLGRPOTrainer(Trainer):
         min_pixels: Optional[int] = 3136,
         attn_implementation: str = "flash_attention_2",
         torch_dtype: str = "bfloat16",
+        use_qlora: Optional[bool] = False,
     ):
         # Args
         if args is None:
@@ -245,15 +248,32 @@ class Qwen2VLGRPOTrainer(Trainer):
             model_init_kwargs["use_cache"] = (
                 False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
             )
-            if "Qwen2-VL" in model_id:
-                model = Qwen2VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
-            elif "Qwen2.5-VL" in model_id:
-                model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
-            elif "Aria" in model_id:
-                model_init_kwargs.pop("use_cache")
-                model = AriaForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
+            if use_qlora:
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,  # 使用 4-bit 量化
+                    bnb_4bit_quant_type="nf4",  # 量化类型
+                    bnb_4bit_compute_dtype=torch_dtype,  # 计算时的 dtype
+                    bnb_4bit_use_double_quant=True,  # 双重量化
+                )
+                if "Qwen2-VL" in model_id:
+                    model = Qwen2VLForConditionalGeneration.from_pretrained(model, quantization_config=quantization_config, **model_init_kwargs)
+                elif "Qwen2.5-VL" in model_id:
+                    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model, quantization_config=quantization_config, **model_init_kwargs)
+                elif "Aria" in model_id:
+                    model_init_kwargs.pop("use_cache")
+                    model = AriaForConditionalGeneration.from_pretrained(model, quantization_config=quantization_config, **model_init_kwargs)
+                else:
+                    model = AutoModelForCausalLM.from_pretrained(model, quantization_config=quantization_config, **model_init_kwargs)
             else:
-                model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+                if "Qwen2-VL" in model_id:
+                    model = Qwen2VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
+                elif "Qwen2.5-VL" in model_id:
+                    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
+                elif "Aria" in model_id:
+                    model_init_kwargs.pop("use_cache")
+                    model = AriaForConditionalGeneration.from_pretrained(model, **model_init_kwargs)
+                else:
+                    model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
